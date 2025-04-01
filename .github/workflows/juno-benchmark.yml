@@ -172,115 +172,161 @@ jobs:
 
       - name: Monitor sync progress
         id: benchmark
-        run: |
-          set -eo pipefail
-          
-          BLOCKS_TO_MONITOR="${{ inputs.blocks_to_monitor || '10000' }}"
-          PROMETHEUS_ENDPOINT="http://${{ secrets.EC2_HOST }}:9090"
-          REPORT_FILE="sync_report.txt"
-          
-          echo "Juno Sync Report - $(date)" > "$REPORT_FILE"
-          echo "--------------------------------" >> "$REPORT_FILE"
-          
-          log() {
-              echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-              echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$REPORT_FILE"
-          }
-          
-          get_current_block() {
-              local result
-              result=$(curl -s "$PROMETHEUS_ENDPOINT" | grep "sync_blockchain_height" | grep -v "^#" | awk '{print $2}' || echo "0")
-              
-              if [[ -z "$result" ]] || ! [[ "$result" =~ ^[0-9]+$ ]]; then
-                  echo "0"
-              else
-                  echo "$result"
-              fi
-          }
-          
-          START_TIME=$(date +%s)
-          log "Sync started at $(date -u)"
-          
-          log "Waiting for initial block height..."
-          RETRY_COUNT=0
-          MAX_RETRIES=24  # 4 minutes (10 seconds * 24)
-          
-          while true; do
-              INITIAL_BLOCK=$(get_current_block)
-              if [[ "$INITIAL_BLOCK" -gt 0 ]]; then
-                  break
-              fi
-              
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              if [[ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]]; then
-                  log "Failed to get initial block height after multiple attempts"
-                  echo "Failed to access Prometheus endpoint: $PROMETHEUS_ENDPOINT"
-                  echo "Last response:"
-                  curl -v "$PROMETHEUS_ENDPOINT"
-                  exit 1
-              fi
-              
-              log "Waiting for Juno to initialize and expose metrics (attempt $RETRY_COUNT/$MAX_RETRIES)..."
-              sleep 10
-          done
-          
-          TARGET_BLOCK=$((INITIAL_BLOCK + BLOCKS_TO_MONITOR))
-          log "Starting from block: $INITIAL_BLOCK"
-          log "Target block: $TARGET_BLOCK"
-          
-          while true; do
-              CURRENT_BLOCK=$(get_current_block)
-              
-              CURRENT_TIME=$(date +%s)
-              ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
-              ELAPSED_MINUTES=$(echo "scale=2; $ELAPSED_TIME / 60" | bc)
-              
-              echo "Current block: $CURRENT_BLOCK / $TARGET_BLOCK (Elapsed: $ELAPSED_MINUTES minutes)"
-              
-              if [[ "$CURRENT_BLOCK" -ge "$TARGET_BLOCK" ]]; then
-                  END_TIME=$(date +%s)
-                  SYNC_DURATION=$((END_TIME - START_TIME))
-                  SYNC_MINUTES=$(echo "scale=2; $SYNC_DURATION / 60" | bc)
-                  
-                  log "Sync completed in: $SYNC_MINUTES minutes"
-                  log "Blocks synced: $((CURRENT_BLOCK - INITIAL_BLOCK))"
-                  log "Average speed: $(echo "scale=2; ($CURRENT_BLOCK - $INITIAL_BLOCK) / $SYNC_DURATION" | bc) blocks/second"
-                  
-                  break
-              fi
-              sleep 5
-          done
-          
-          SYNC_TIME=$(grep "Sync completed in:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "N/A")
-          BLOCKS_SYNCED=$(grep "Blocks synced:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "0")
-          AVG_SPEED=$(grep "Average speed:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "N/A")
-          
-          echo "===== BENCHMARK RESULTS ====="
-          echo "Sync Time: $SYNC_TIME"
-          echo "Blocks Synced: $BLOCKS_SYNCED"
-          echo "Average Speed: $AVG_SPEED"
-          
-          echo "sync_time=$SYNC_TIME" >> $GITHUB_OUTPUT
-          echo "blocks_synced=$BLOCKS_SYNCED" >> $GITHUB_OUTPUT
-          echo "avg_speed=$AVG_SPEED" >> $GITHUB_OUTPUT
-          
-          RUN_ID=$(date +%Y%m%d%H%M%S)
-          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
-          
-          echo "===== FULL REPORT ====="
-          cat "$REPORT_FILE"
-        timeout-minutes: 150
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_PRIVATE_KEY }}
+          timeout: 130m
+          command_timeout: 120m
+          # Using the script_stop: false to ensure the entire output is captured
+          script_stop: false
+          script: |
+            set -eo pipefail
+            
+            BLOCKS_TO_MONITOR="${{ inputs.blocks_to_monitor || '10000' }}"
+            PROMETHEUS_ENDPOINT="http://localhost:9090"
+            REPORT_FILE="$HOME/juno-benchmark/sync_report.txt"
+            METRICS_FILE="$HOME/juno-benchmark/metrics.txt"
+            
+            echo "Juno Sync Report - $(date)" > "$REPORT_FILE"
+            echo "--------------------------------" >> "$REPORT_FILE"
+            
+            log() {
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$REPORT_FILE"
+            }
+            
+            get_current_block() {
+                local result
+                result=$(curl -s "$PROMETHEUS_ENDPOINT" | grep "sync_blockchain_height" | grep -v "^#" | awk '{print $2}' || echo "0")
+                
+                if [[ -z "$result" ]] || ! [[ "$result" =~ ^[0-9]+$ ]]; then
+                    echo "0"
+                else
+                    echo "$result"
+                fi
+            }
+            
+            START_TIME=$(date +%s)
+            log "Sync started at $(date -u)"
+            
+            log "Waiting for initial block height..."
+            RETRY_COUNT=0
+            MAX_RETRIES=24  # 4 minutes (10 seconds * 24)
+            
+            while true; do
+                INITIAL_BLOCK=$(get_current_block)
+                if [[ "$INITIAL_BLOCK" -gt 0 ]]; then
+                    break
+                fi
+                
+                RETRY_COUNT=$((RETRY_COUNT + 1))
+                if [[ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]]; then
+                    log "Failed to get initial block height after multiple attempts"
+                    echo "Failed to access Prometheus endpoint: $PROMETHEUS_ENDPOINT"
+                    echo "Last response:"
+                    curl -v "$PROMETHEUS_ENDPOINT"
+                    exit 1
+                fi
+                
+                log "Waiting for Juno to initialize and expose metrics (attempt $RETRY_COUNT/$MAX_RETRIES)..."
+                sleep 10
+            done
+            
+            TARGET_BLOCK=$((INITIAL_BLOCK + BLOCKS_TO_MONITOR))
+            log "Starting from block: $INITIAL_BLOCK"
+            log "Target block: $TARGET_BLOCK"
+            
+            while true; do
+                CURRENT_BLOCK=$(get_current_block)
+                
+                CURRENT_TIME=$(date +%s)
+                ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+                ELAPSED_MINUTES=$(echo "scale=2; $ELAPSED_TIME / 60" | bc)
+                
+                echo "Current block: $CURRENT_BLOCK / $TARGET_BLOCK (Elapsed: $ELAPSED_MINUTES minutes)"
+                
+                if [[ "$CURRENT_BLOCK" -ge "$TARGET_BLOCK" ]]; then
+                    END_TIME=$(date +%s)
+                    SYNC_DURATION=$((END_TIME - START_TIME))
+                    SYNC_MINUTES=$(echo "scale=2; $SYNC_DURATION / 60" | bc)
+                    
+                    log "Sync completed in: $SYNC_MINUTES minutes"
+                    log "Blocks synced: $((CURRENT_BLOCK - INITIAL_BLOCK))"
+                    log "Average speed: $(echo "scale=2; ($CURRENT_BLOCK - $INITIAL_BLOCK) / $SYNC_DURATION" | bc) blocks/second"
+                    
+                    break
+                fi
+                sleep 5
+            done
+            
+            SYNC_TIME=$(grep "Sync completed in:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "N/A")
+            BLOCKS_SYNCED=$(grep "Blocks synced:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "0")
+            AVG_SPEED=$(grep "Average speed:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "N/A")
+            RUN_ID=$(date +%Y%m%d%H%M%S)
+            
+            # Save metrics to a file that we can read later
+            echo "SYNC_TIME=$SYNC_TIME" > "$METRICS_FILE"
+            echo "BLOCKS_SYNCED=$BLOCKS_SYNCED" >> "$METRICS_FILE"
+            echo "AVG_SPEED=$AVG_SPEED" >> "$METRICS_FILE"
+            echo "RUN_ID=$RUN_ID" >> "$METRICS_FILE"
+            
+            echo "===== BENCHMARK RESULTS ====="
+            echo "Sync Time: $SYNC_TIME"
+            echo "Blocks Synced: $BLOCKS_SYNCED"
+            echo "Average Speed: $AVG_SPEED"
+            echo "Run ID: $RUN_ID"
+            
+            echo "===== FULL REPORT ====="
+            cat "$REPORT_FILE"
+            
+            echo "::METRICS:START::"
+            cat "$METRICS_FILE"
+            echo "::METRICS:END::"
 
-      #- name: Stop Juno on EC2
-      #  if: always()
-      #  uses: appleboy/ssh-action@master
-      #  with:
-      #    host: ${{ secrets.EC2_HOST }}
-      #    username: ${{ secrets.EC2_USER }}
-      ##    key: ${{ secrets.EC2_PRIVATE_KEY }}
-      #    script: |
-      #      pkill -x juno || true
-      #      echo "Juno stopped"
+      - name: Extract metrics
+        id: extract-metrics
+        run: |
+          METRICS_SECTION=$(grep -A 100 "::METRICS:START::" <<< "${{ steps.benchmark.outputs.stdout }}" | grep -B 100 "::METRICS:END::" | grep -v "::METRICS:")
+          
+          if [[ -n "$METRICS_SECTION" ]]; then
+            SYNC_TIME=$(echo "$METRICS_SECTION" | grep "SYNC_TIME=" | cut -d'=' -f2)
+            BLOCKS_SYNCED=$(echo "$METRICS_SECTION" | grep "BLOCKS_SYNCED=" | cut -d'=' -f2)
+            AVG_SPEED=$(echo "$METRICS_SECTION" | grep "AVG_SPEED=" | cut -d'=' -f2)
+            RUN_ID=$(echo "$METRICS_SECTION" | grep "RUN_ID=" | cut -d'=' -f2)
+            
+            echo "sync_time=$SYNC_TIME" >> $GITHUB_OUTPUT
+            echo "blocks_synced=$BLOCKS_SYNCED" >> $GITHUB_OUTPUT
+            echo "avg_speed=$AVG_SPEED" >> $GITHUB_OUTPUT
+            echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+            
+            echo "Successfully extracted metrics:"
+            echo "Sync Time: $SYNC_TIME"
+            echo "Blocks Synced: $BLOCKS_SYNCED"
+            echo "Average Speed: $AVG_SPEED"
+            echo "Run ID: $RUN_ID"
+          else
+            echo "Warning: Could not extract metrics from SSH output"
+            # Set default values to prevent errors
+            echo "sync_time=N/A" >> $GITHUB_OUTPUT
+            echo "blocks_synced=0" >> $GITHUB_OUTPUT
+            echo "avg_speed=N/A" >> $GITHUB_OUTPUT
+            echo "run_id=$(date +%Y%m%d%H%M%S)" >> $GITHUB_OUTPUT
+          fi
+        timeout-minutes: 1
+
+      - name: Stop Juno on EC2
+        if: always()
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_PRIVATE_KEY }}
+          command_timeout: 1m
+          script: |
+            pkill -x juno || true
+            echo "Juno stopped"
 
       - name: Format version for display
         id: format-version
@@ -308,7 +354,7 @@ jobs:
                           "title": [
                             {
                               "text": {
-                                "content": "Juno ${{ steps.format-version.outputs.display_version || inputs.version }} Benchmark - ${{ steps.benchmark.outputs.run_id }}"
+                                "content": "Juno ${{ steps.format-version.outputs.display_version || inputs.version }} Benchmark - ${{ steps.extract-metrics.outputs.run_id }}"
                               }
                             }
                           ]
@@ -317,13 +363,13 @@ jobs:
                           "text": "${{ inputs.version }}"
                         },
                         "Sync Time": {
-                          "text": "${{ steps.benchmark.outputs.sync_time }}"
+                          "text": "${{ steps.extract-metrics.outputs.sync_time }}"
                         },
                         "Blocks Synced": {
-                          "number": ${{ steps.benchmark.outputs.blocks_synced || 0 }}
+                          "number": ${{ steps.extract-metrics.outputs.blocks_synced || 0 }}
                         },
                         "Average Speed": {
-                          "text": "${{ steps.benchmark.outputs.avg_speed }}"
+                          "text": "${{ steps.extract-metrics.outputs.avg_speed }}"
                         },
                         "Run URL": {
                           "url": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
