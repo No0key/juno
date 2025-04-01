@@ -28,7 +28,7 @@ nohup "$WORK_DIR/juno" \
     --disable-l1-verification \
     --network=sepolia \
     --http --http-host=127.0.0.1 --http-port=6060 \
-    --metrics --metrics-host=127.0.0.1 --metrics-port=9090 \
+    --metrics --metrics-host=0.0.0.0 --metrics-port=9090 \
     > "$JUNO_LOG" 2>&1 &
 
 sleep 5

@@ -271,16 +271,16 @@ jobs:
           cat "$REPORT_FILE"
         timeout-minutes: 150
 
-      - name: Stop Juno on EC2
-        if: always()
-        uses: appleboy/ssh-action@master
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_PRIVATE_KEY }}
-          script: |
-            pkill -x juno || true
-            echo "Juno stopped"
+      #- name: Stop Juno on EC2
+      #  if: always()
+      #  uses: appleboy/ssh-action@master
+      #  with:
+      #    host: ${{ secrets.EC2_HOST }}
+      #    username: ${{ secrets.EC2_USER }}
+      ##    key: ${{ secrets.EC2_PRIVATE_KEY }}
+      #    script: |
+      #      pkill -x juno || true
+      #      echo "Juno stopped"
 
       - name: Format version for display
         id: format-version
