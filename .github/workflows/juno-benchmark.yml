@@ -179,15 +179,13 @@ jobs:
           key: ${{ secrets.EC2_PRIVATE_KEY }}
           timeout: 130m
           command_timeout: 120m
-          # Using the script_stop: false to ensure the entire output is captured
-          script_stop: false
           script: |
             set -eo pipefail
             
             BLOCKS_TO_MONITOR="${{ inputs.blocks_to_monitor || '10000' }}"
             PROMETHEUS_ENDPOINT="http://localhost:9090"
             REPORT_FILE="$HOME/juno-benchmark/sync_report.txt"
-            METRICS_FILE="$HOME/juno-benchmark/metrics.txt"
+            METRICS_FILE="$HOME/juno-benchmark/metrics.json"
             
             echo "Juno Sync Report - $(date)" > "$REPORT_FILE"
             echo "--------------------------------" >> "$REPORT_FILE"
@@ -266,11 +264,14 @@ jobs:
             AVG_SPEED=$(grep "Average speed:" "$REPORT_FILE" | awk -F': ' '{print $2}' || echo "N/A")
             RUN_ID=$(date +%Y%m%d%H%M%S)
             
-            # Save metrics to a file that we can read later
-            echo "SYNC_TIME=$SYNC_TIME" > "$METRICS_FILE"
-            echo "BLOCKS_SYNCED=$BLOCKS_SYNCED" >> "$METRICS_FILE"
-            echo "AVG_SPEED=$AVG_SPEED" >> "$METRICS_FILE"
-            echo "RUN_ID=$RUN_ID" >> "$METRICS_FILE"
+            cat > "$METRICS_FILE" << EOF
+            {
+              "sync_time": "$SYNC_TIME",
+              "blocks_synced": "$BLOCKS_SYNCED",
+              "avg_speed": "$AVG_SPEED",
+              "run_id": "$RUN_ID"
+            }
+            EOF
             
             echo "===== BENCHMARK RESULTS ====="
             echo "Sync Time: $SYNC_TIME"
@@ -281,20 +282,27 @@ jobs:
             echo "===== FULL REPORT ====="
             cat "$REPORT_FILE"
             
-            echo "::METRICS:START::"
-            cat "$METRICS_FILE"
-            echo "::METRICS:END::"
+            echo "Metrics saved to: $METRICS_FILE"
+
+      - name: Download metrics file
+        uses: appleboy/scp-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_PRIVATE_KEY }}
+          source: ~/juno-benchmark/metrics.json
+          target: ./
+          strip_components: 2
+          timeout: 1m
 
       - name: Extract metrics
         id: extract-metrics
         run: |
-          METRICS_SECTION=$(grep -A 100 "::METRICS:START::" <<< "${{ steps.benchmark.outputs.stdout }}" | grep -B 100 "::METRICS:END::" | grep -v "::METRICS:")
-          
-          if [[ -n "$METRICS_SECTION" ]]; then
-            SYNC_TIME=$(echo "$METRICS_SECTION" | grep "SYNC_TIME=" | cut -d'=' -f2)
-            BLOCKS_SYNCED=$(echo "$METRICS_SECTION" | grep "BLOCKS_SYNCED=" | cut -d'=' -f2)
-            AVG_SPEED=$(echo "$METRICS_SECTION" | grep "AVG_SPEED=" | cut -d'=' -f2)
-            RUN_ID=$(echo "$METRICS_SECTION" | grep "RUN_ID=" | cut -d'=' -f2)
+          if [ -f "metrics.json" ]; then
+            SYNC_TIME=$(jq -r '.sync_time' metrics.json)
+            BLOCKS_SYNCED=$(jq -r '.blocks_synced' metrics.json)
+            AVG_SPEED=$(jq -r '.avg_speed' metrics.json)
+            RUN_ID=$(jq -r '.run_id' metrics.json)
             
             echo "sync_time=$SYNC_TIME" >> $GITHUB_OUTPUT
             echo "blocks_synced=$BLOCKS_SYNCED" >> $GITHUB_OUTPUT
@@ -307,8 +315,7 @@ jobs:
             echo "Average Speed: $AVG_SPEED"
             echo "Run ID: $RUN_ID"
           else
-            echo "Warning: Could not extract metrics from SSH output"
-            # Set default values to prevent errors
+            echo "Warning: metrics.json file not found"
             echo "sync_time=N/A" >> $GITHUB_OUTPUT
             echo "blocks_synced=0" >> $GITHUB_OUTPUT
             echo "avg_speed=N/A" >> $GITHUB_OUTPUT
